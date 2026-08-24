@@ -1,0 +1,3 @@
+# Settings de pnpm 11: viven aquí, no en package.json.
+allowBuilds:
+  esbuild: true
