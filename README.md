@@ -1,29 +1,45 @@
 # `@edgargmaya/fastify-layer`
 
-Plugin Fastify 5 (`fastify-plugin`): no define rutas. La app inyecta `LayerOptions` y sigue siendo dueña de sus endpoints.
+Plugin Fastify 5 (`fastify-plugin`): no define rutas. La app inyecta `LayerOptions` y sigue siendo dueña de sus endpoints, **incluidos los nombres y cupos de plan**.
 
 ```bash
 pnpm add @edgargmaya/fastify-layer
 ```
 
-```ts
-import Fastify from 'fastify';
-import fastifyLayer from '@edgargmaya/fastify-layer';
+Cupo único (sin planes):
 
-const app = Fastify();
+```ts
+await app.register(fastifyLayer, {
+  include: ['/saludo'],
+  jwt: { issuer: 'urn:serverless:auth', audience: 'urn:serverless:saludo-api' },
+  keyParts: ['username', 'ip'],
+  rateLimit: { max: 40, timeWindowMs: 60_000 },
+});
+```
+
+Varios planes definidos por la app:
+
+```ts
 await app.register(fastifyLayer, {
   include: ['/saludo'],
   redis: { host, port, password, tls: true },
   jwt: { issuer: 'urn:serverless:auth', audience: 'urn:serverless:saludo-api' },
   keyParts: ['username', 'plan', 'ip'],
-  rateLimit: { byProfile: { free: 10, premium: 25 }, timeWindowMs: 60_000 },
+  rateLimit: {
+    plans: { free: 10, premium: 25 },
+    defaultPlan: 'free',
+    planClaim: 'plan',
+    timeWindowMs: 60_000,
+  },
 });
 ```
+
+Si hay `plans`, hace falta `defaultPlan` (sin JWT, claim vacío o valor que no está en el mapa). Los nombres se normalizan a minúsculas. El claim del JWT es configurable (`planClaim`, default `plan`).
 
 ```text
 request
   → onRequest: include/exclude → decodeJwt (iss/aud) → identidad
-  → @fastify/rate-limit (Redis o memoria) clave username:plan:ip
+  → @fastify/rate-limit (Redis o memoria)
   → handler de la app
 ```
 
@@ -35,7 +51,7 @@ La firma del JWT la valida quien autentique la petición (por ejemplo un Lambda 
 
 ```text
 src/
-  config.ts      LayerOptions
+  config.ts      LayerOptions + resolveRateLimit
   match.ts       include / exclude
   identity.ts    Bearer → { sub, username, plan, iss }
   key.ts         keyParts → string Redis
@@ -50,8 +66,12 @@ src/
 | `include` / `exclude` | Pathnames |
 | `redis` | `host`, `port`, `password`, `tls` |
 | `jwt` | `issuer`, `audience` (filtro del payload) |
-| `keyParts` | default `username`, `plan`, `ip` |
-| `rateLimit` | `byProfile`, `timeWindowMs`, `skipOnError`, `banThreshold`, `nameSpace` |
+| `keyParts` | default `username`, `ip` (añade `plan` si usas catálogo) |
+| `rateLimit.max` | Cupo único si no hay `plans` (default 10) |
+| `rateLimit.plans` | Mapa `nombre → máximo` definido por la app |
+| `rateLimit.defaultPlan` | Obligatorio con `plans` |
+| `rateLimit.planClaim` | Claim JWT (default `plan`) |
+| `rateLimit` | también `timeWindowMs`, `skipOnError`, `banThreshold`, `nameSpace` |
 
 429 al superar el cupo; ban → 403. Cabeceras `x-ratelimit-*`. Sigue `x-serverless-layer: 1`.
 

@@ -1,12 +1,13 @@
 /**
  * Capa Fastify: identidad JWT → @fastify/rate-limit (Redis si hay config).
  * No registra rutas; `fastify-plugin` aplica los hooks al padre.
+ * Cupos y nombres de plan: `LayerOptions.rateLimit` (la app), no este archivo.
  */
 
 import rateLimit from '@fastify/rate-limit';
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { defaults, type LayerOptions, type UserPlan } from './config.js';
+import { defaults, resolveRateLimit, type LayerOptions } from './config.js';
 import { identityFromRequest, type RequestIdentity } from './identity.js';
 import { buildRateLimitKey, clientIp } from './key.js';
 import { shouldApply } from './match.js';
@@ -18,24 +19,23 @@ declare module 'fastify' {
   }
 }
 
-function identityOf(request: FastifyRequest, opts: LayerOptions): RequestIdentity {
-  if (!request.rateLimitIdentity) {
-    request.rateLimitIdentity = identityFromRequest(request, opts.jwt);
-  }
-  return request.rateLimitIdentity;
-}
-
 const plugin: FastifyPluginAsync<LayerOptions> = async (app: FastifyInstance, opts) => {
   const headerName = opts.headerName ?? defaults.headerName;
   const headerValue = opts.headerValue ?? defaults.headerValue;
   const logMessage = opts.logMessage ?? defaults.logMessage;
   const keyParts = opts.keyParts ?? defaults.keyParts;
-  const rl = { ...defaults.rateLimit, ...opts.rateLimit };
-  const byProfile = { ...defaults.rateLimit.byProfile, ...rl.byProfile };
+  const rl = resolveRateLimit(opts.rateLimit);
+
+  const identityOf = (request: FastifyRequest): RequestIdentity => {
+    if (!request.rateLimitIdentity) {
+      request.rateLimitIdentity = identityFromRequest(request, opts.jwt, rl);
+    }
+    return request.rateLimitIdentity;
+  };
 
   app.addHook('onRequest', async (request, reply) => {
     if (!shouldApply(request, opts)) return;
-    identityOf(request, opts);
+    identityOf(request);
     request.log.info({ path: request.url }, logMessage);
     void reply.header(headerName, headerValue);
   });
@@ -46,8 +46,9 @@ const plugin: FastifyPluginAsync<LayerOptions> = async (app: FastifyInstance, op
     global: true,
     allowList: (request) => !shouldApply(request, opts),
     max: (request) => {
-      const plan: UserPlan = identityOf(request, opts).plan;
-      return byProfile[plan] ?? byProfile.free;
+      const plan = identityOf(request).plan;
+      if (rl.plans) return rl.plans[plan] ?? rl.plans[rl.defaultPlan] ?? rl.max;
+      return rl.max;
     },
     timeWindow: rl.timeWindowMs,
     ...(redis ? { redis } : {}),
@@ -56,7 +57,7 @@ const plugin: FastifyPluginAsync<LayerOptions> = async (app: FastifyInstance, op
     skipOnError: rl.skipOnError,
     ban: rl.banThreshold,
     keyGenerator: (request) =>
-      buildRateLimitKey(keyParts, identityOf(request, opts), clientIp(request)),
+      buildRateLimitKey(keyParts, identityOf(request), clientIp(request)),
     addHeadersOnExceeding: {
       'x-ratelimit-limit': true,
       'x-ratelimit-remaining': true,

@@ -59,10 +59,10 @@ describe('@edgargmaya/fastify-layer', () => {
     expect(res.headers['x-serverless-layer']).toBeUndefined();
   });
 
-  it('responde 429 al superar el cupo (store en memoria)', async () => {
+  it('responde 429 al superar el cupo único (store en memoria)', async () => {
     const app = await appWithLayer({
       include: ['/saludo'],
-      rateLimit: { byProfile: { free: 2 }, timeWindowMs: 60_000, banThreshold: 100 },
+      rateLimit: { max: 2, timeWindowMs: 60_000, banThreshold: 100 },
     });
     expect((await app.inject({ method: 'GET', url: '/saludo' })).statusCode).toBe(200);
     expect((await app.inject({ method: 'GET', url: '/saludo' })).statusCode).toBe(200);
@@ -78,19 +78,17 @@ describe('@edgargmaya/fastify-layer', () => {
       aud: jwt.audience,
       sub: 'user-alice',
       preferred_username: 'alice',
-      plan: 'free',
     });
     const bob = jwtWith({
       iss: jwt.issuer,
       aud: jwt.audience,
       sub: 'user-bob',
       preferred_username: 'bob',
-      plan: 'free',
     });
     const app = await appWithLayer({
       include: ['/saludo'],
       jwt,
-      rateLimit: { byProfile: { free: 1 }, timeWindowMs: 60_000, banThreshold: 100 },
+      rateLimit: { max: 1, timeWindowMs: 60_000, banThreshold: 100 },
     });
 
     expect(
@@ -105,5 +103,93 @@ describe('@edgargmaya/fastify-layer', () => {
       (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${bob}` } }))
         .statusCode,
     ).toBe(200);
+  });
+
+  it('aplica cupos distintos según el catálogo de planes de la app', async () => {
+    const jwt = { issuer: 'urn:serverless:auth', audience: 'urn:serverless:saludo-api' };
+    const starter = jwtWith({
+      iss: jwt.issuer,
+      aud: jwt.audience,
+      sub: 'user-a',
+      preferred_username: 'ana',
+      plan: 'starter',
+    });
+    const pro = jwtWith({
+      iss: jwt.issuer,
+      aud: jwt.audience,
+      sub: 'user-b',
+      preferred_username: 'ben',
+      plan: 'pro',
+    });
+    const app = await appWithLayer({
+      include: ['/saludo'],
+      jwt,
+      keyParts: ['username', 'plan', 'ip'],
+      rateLimit: {
+        plans: { starter: 1, pro: 3 },
+        defaultPlan: 'starter',
+        timeWindowMs: 60_000,
+        banThreshold: 100,
+      },
+    });
+
+    expect(
+      (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${starter}` } }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${starter}` } }))
+        .statusCode,
+    ).toBe(429);
+
+    expect(
+      (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${pro}` } }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${pro}` } }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${pro}` } }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${pro}` } }))
+        .statusCode,
+    ).toBe(429);
+  });
+
+  it('con max único ignora un claim plan del JWT', async () => {
+    const jwt = { issuer: 'urn:serverless:auth', audience: 'urn:serverless:saludo-api' };
+    const token = jwtWith({
+      iss: jwt.issuer,
+      aud: jwt.audience,
+      sub: 'user-bob',
+      preferred_username: 'bob',
+      plan: 'premium',
+    });
+    const app = await appWithLayer({
+      include: ['/saludo'],
+      jwt,
+      rateLimit: { max: 1, timeWindowMs: 60_000, banThreshold: 100 },
+    });
+    expect(
+      (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${token}` } }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${token}` } }))
+        .statusCode,
+    ).toBe(429);
+  });
+
+  it('falla al registrar si defaultPlan no está en plans', async () => {
+    const app = Fastify({ logger: false });
+    await expect(
+      app.register(fastifyLayer, {
+        rateLimit: { plans: { starter: 10 }, defaultPlan: 'missing' },
+      }),
+    ).rejects.toThrow(/defaultPlan/);
   });
 });

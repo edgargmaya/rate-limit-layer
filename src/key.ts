@@ -6,7 +6,7 @@ export function clientIp(request: FastifyRequest): string {
   return request.ip || '0.0.0.0';
 }
 
-/** Clave estable entre instancias Lambda: p. ej. `alice:premium:203.0.113.10`. */
+/** Clave estable entre instancias Lambda: p. ej. `alice:203.0.113.10` o `alice:pro:203.0.113.10`. */
 export function buildRateLimitKey(
   parts: RateLimitKeyPart[],
   identity: RequestIdentity,

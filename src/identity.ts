@@ -1,11 +1,11 @@
 import { decodeJwt } from 'jose';
 import type { FastifyRequest } from 'fastify';
-import type { JwtOptions, UserPlan } from './config.js';
+import type { JwtOptions, ResolvedRateLimit } from './config.js';
 
 export type RequestIdentity = {
   sub: string;
   username: string;
-  plan: UserPlan;
+  plan: string;
   iss: string;
 };
 
@@ -22,22 +22,48 @@ function audienceOf(aud: unknown): string[] {
   return [];
 }
 
-function resolvePlan(raw: unknown): UserPlan {
-  return typeof raw === 'string' && raw.trim().toLowerCase() === 'premium' ? 'premium' : 'free';
+export function resolvePlan(raw: unknown, rateLimit: ResolvedRateLimit): string {
+  if (!rateLimit.plans) return rateLimit.defaultPlan;
+  if (typeof raw !== 'string') return rateLimit.defaultPlan;
+  const name = raw.trim().toLowerCase();
+  return name in rateLimit.plans ? name : rateLimit.defaultPlan;
 }
 
-const anonymous: RequestIdentity = {
-  sub: 'anonymous',
-  username: 'anonymous',
-  plan: 'free',
-  iss: '',
-};
+function anonymousIdentity(defaultPlan: string): RequestIdentity {
+  return {
+    sub: 'anonymous',
+    username: 'anonymous',
+    plan: defaultPlan,
+    iss: '',
+  };
+}
+
+function claimValue(payload: Record<string, unknown>, claim: string): unknown {
+  return payload[claim];
+}
 
 /**
  * Identidad para la clave Redis. API Gateway ya validó la firma;
  * aquí solo se decodifica el payload (sin red / JWKS) y se filtra iss/aud.
+ * El plan se resuelve contra el catálogo de la app (`rateLimit.plans`).
  */
-export function identityFromRequest(request: FastifyRequest, jwt?: JwtOptions): RequestIdentity {
+export function identityFromRequest(
+  request: FastifyRequest,
+  jwt?: JwtOptions,
+  rateLimit?: ResolvedRateLimit,
+): RequestIdentity {
+  const catalog = rateLimit ?? {
+    max: 10,
+    plans: undefined,
+    defaultPlan: 'default',
+    planClaim: 'plan',
+    timeWindowMs: 60_000,
+    skipOnError: false,
+    banThreshold: 5,
+    nameSpace: 'saludo-rl:',
+  };
+  const anonymous = anonymousIdentity(catalog.defaultPlan);
+
   const token = extractBearer(
     typeof request.headers.authorization === 'string' ? request.headers.authorization : undefined,
   );
@@ -56,7 +82,7 @@ export function identityFromRequest(request: FastifyRequest, jwt?: JwtOptions): 
     return {
       sub,
       username,
-      plan: resolvePlan(payload.plan),
+      plan: resolvePlan(claimValue(payload, catalog.planClaim), catalog),
       iss: typeof payload.iss === 'string' ? payload.iss : '',
     };
   } catch {
