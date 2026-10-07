@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRateLimit } from '../src/config.js';
+import { resolveRateLimit, resolveTimeWindowMs } from '../src/config.js';
 import { identityFromRequest, resolvePlan } from '../src/identity.js';
 import { buildRateLimitKey } from '../src/key.js';
 
@@ -29,6 +29,18 @@ describe('resolveRateLimit', () => {
     expect(() =>
       resolveRateLimit({ plans: { starter: 10 }, defaultPlan: 'pro' }),
     ).toThrow(/must exist in plans/);
+  });
+
+  it('traduce window a una sola duración', () => {
+    expect(resolveTimeWindowMs({ window: 'minute' })).toBe(60_000);
+    expect(resolveTimeWindowMs({ window: 'hour' })).toBe(3_600_000);
+    expect(resolveTimeWindowMs({ window: 'day' })).toBe(86_400_000);
+    expect(resolveTimeWindowMs({ window: { unit: 'minute', every: 5 } })).toBe(300_000);
+    expect(resolveTimeWindowMs({ window: { unit: 'hour', every: 8 } })).toBe(28_800_000);
+    expect(resolveTimeWindowMs({ window: { unit: 'day' } })).toBe(86_400_000);
+    expect(resolveRateLimit({ max: 5, window: { unit: 'minute', every: 5 } }).timeWindowMs).toBe(300_000);
+    expect(() => resolveTimeWindowMs({ window: 'minute', timeWindowMs: 1000 })).toThrow(/not both/);
+    expect(() => resolveTimeWindowMs({ window: { unit: 'minute', every: 0 } })).toThrow(/window.every/);
   });
 
   it('normaliza nombres de plan a minúsculas', () => {
@@ -123,5 +135,12 @@ describe('buildRateLimitKey', () => {
         '1.2.3.4',
       ),
     ).toBe('alice:free:1.2.3.4');
+  });
+
+  it('añade el patrón solo cuando la regla de ruta lo pide', () => {
+    const identity = { sub: 'user-alice', username: 'Alice', plan: 'free', iss: 'urn:serverless:auth' };
+    expect(buildRateLimitKey(['username', 'ip'], identity, '1.2.3.4', '/prefijo1/:idCliente')).toBe(
+      'alice:1.2.3.4:/prefijo1/:idCliente',
+    );
   });
 });

@@ -6,11 +6,16 @@ export function clientIp(request: FastifyRequest): string {
   return request.ip || '0.0.0.0';
 }
 
-/** Clave estable entre instancias Lambda: p. ej. `alice:203.0.113.10` o `alice:pro:203.0.113.10`. */
+/**
+ * Clave estable entre instancias Lambda.
+ * `alice:203.0.113.10` en `include`. Con `routes`, el patrón va al final:
+ * `alice:203.0.113.10:/prefijo1/:idCliente`.
+ */
 export function buildRateLimitKey(
   parts: RateLimitKeyPart[],
   identity: RequestIdentity,
   ip: string,
+  routeUrl?: string,
 ): string {
   const values: Record<RateLimitKeyPart, string> = {
     sub: identity.sub,
@@ -19,5 +24,6 @@ export function buildRateLimitKey(
     iss: identity.iss,
     ip,
   };
-  return parts.map((part) => values[part] || 'unknown').join(':');
+  const base = parts.map((part) => values[part] || 'unknown').join(':');
+  return routeUrl ? `${base}:${routeUrl}` : base;
 }

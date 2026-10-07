@@ -7,15 +7,16 @@
 import rateLimit from '@fastify/rate-limit';
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { defaults, resolveRateLimit, type LayerOptions } from './config.js';
+import { compileLayer, defaults, type LayerOptions } from './config.js';
 import { identityFromRequest, type RequestIdentity } from './identity.js';
 import { buildRateLimitKey, clientIp } from './key.js';
-import { shouldApply } from './match.js';
+import { matchLimit, type LimitMatch } from './match.js';
 import { closeRedis, getRedis } from './redis.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
     rateLimitIdentity?: RequestIdentity;
+    rateLimitMatch?: LimitMatch;
   }
 }
 
@@ -24,17 +25,31 @@ const plugin: FastifyPluginAsync<LayerOptions> = async (app: FastifyInstance, op
   const headerValue = opts.headerValue ?? defaults.headerValue;
   const logMessage = opts.logMessage ?? defaults.logMessage;
   const keyParts = opts.keyParts ?? defaults.keyParts;
-  const rl = resolveRateLimit(opts.rateLimit);
+  const compiled = compileLayer(opts);
+
+  const matchOf = (request: FastifyRequest): LimitMatch => {
+    if (!request.rateLimitMatch) {
+      request.rateLimitMatch = matchLimit(request, compiled);
+    }
+    return request.rateLimitMatch;
+  };
 
   const identityOf = (request: FastifyRequest): RequestIdentity => {
     if (!request.rateLimitIdentity) {
-      request.rateLimitIdentity = identityFromRequest(request, opts.jwt, rl);
+      request.rateLimitIdentity = identityFromRequest(request, opts.jwt, matchOf(request).rateLimit);
     }
     return request.rateLimitIdentity;
   };
 
+  const maxFor = (request: FastifyRequest): number => {
+    const rl = matchOf(request).rateLimit;
+    const plan = identityOf(request).plan;
+    if (rl.plans) return rl.plans[plan] ?? rl.plans[rl.defaultPlan] ?? rl.max;
+    return rl.max;
+  };
+
   app.addHook('onRequest', async (request, reply) => {
-    if (!shouldApply(request, opts)) return;
+    if (!matchOf(request).apply) return;
     identityOf(request);
     request.log.info({ path: request.url }, logMessage);
     void reply.header(headerName, headerValue);
@@ -44,20 +59,21 @@ const plugin: FastifyPluginAsync<LayerOptions> = async (app: FastifyInstance, op
 
   await app.register(rateLimit, {
     global: true,
-    allowList: (request) => !shouldApply(request, opts),
-    max: (request) => {
-      const plan = identityOf(request).plan;
-      if (rl.plans) return rl.plans[plan] ?? rl.plans[rl.defaultPlan] ?? rl.max;
-      return rl.max;
-    },
-    timeWindow: rl.timeWindowMs,
+    allowList: (request) => !matchOf(request).apply,
+    max: (request) => maxFor(request),
+    timeWindow: (request) => matchOf(request).rateLimit.timeWindowMs,
     ...(redis ? { redis } : {}),
-    nameSpace: rl.nameSpace,
+    nameSpace: compiled.globalRateLimit.nameSpace,
     continueExceeding: true,
-    skipOnError: rl.skipOnError,
-    ban: rl.banThreshold,
+    skipOnError: compiled.globalRateLimit.skipOnError,
+    ban: compiled.globalRateLimit.banThreshold,
     keyGenerator: (request) =>
-      buildRateLimitKey(keyParts, identityOf(request), clientIp(request)),
+      buildRateLimitKey(
+        keyParts,
+        identityOf(request),
+        clientIp(request),
+        matchOf(request).routeUrl,
+      ),
     addHeadersOnExceeding: {
       'x-ratelimit-limit': true,
       'x-ratelimit-remaining': true,

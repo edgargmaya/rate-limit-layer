@@ -192,4 +192,146 @@ describe('@edgargmaya/fastify-layer', () => {
       }),
     ).rejects.toThrow(/defaultPlan/);
   });
+
+  it('include comparte un solo cupo entre pathnames exactos', async () => {
+    const app = await appWithLayer({
+      include: ['/saludo', '/health'],
+      rateLimit: { max: 1, banThreshold: 100 },
+    });
+    expect((await app.inject({ method: 'GET', url: '/saludo' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(429);
+  });
+
+  it('cada ruta de routes tiene su cupo y una ruta sin máximo usa el global', async () => {
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    await app.register(fastifyLayer, {
+      rateLimit: { max: 2, window: 'minute', banThreshold: 100 },
+      routes: [
+        { url: '/saludo' },
+        { url: '/health', rateLimit: { max: 1 } },
+      ],
+    });
+    app.get('/saludo', async () => ({ ok: true }));
+    app.get('/health', async () => ({ status: 'ok' }));
+    app.get('/otro', async () => ({ ok: true }));
+    await app.ready();
+
+    expect((await app.inject({ method: 'GET', url: '/saludo' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/saludo' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/saludo' })).statusCode).toBe(429);
+
+    expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(429);
+
+    for (let i = 0; i < 5; i += 1) {
+      const res = await app.inject({ method: 'GET', url: '/otro' });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['x-serverless-layer']).toBeUndefined();
+    }
+  });
+
+  it('un path param agrupa los ids en el cupo de esa ruta', async () => {
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    await app.register(fastifyLayer, {
+      rateLimit: { banThreshold: 100 },
+      routes: [{ url: '/prefijo1/:idCliente', rateLimit: { max: 1, window: 'minute' } }],
+    });
+    app.get('/prefijo1/:idCliente', async () => ({ ok: true }));
+    await app.ready();
+
+    expect((await app.inject({ method: 'GET', url: '/prefijo1/acme' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/prefijo1/bob' })).statusCode).toBe(429);
+  });
+
+  it('el patrón con prefijo de Fastify es el url completo de la ruta', async () => {
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    await app.register(fastifyLayer, {
+      rateLimit: { banThreshold: 100 },
+      routes: [{ url: '/prefijo1/:idCliente', rateLimit: { max: 1 } }],
+    });
+    await app.register(
+      async (scope) => {
+        scope.get('/:idCliente', async () => ({ ok: true }));
+      },
+      { prefix: '/prefijo1' },
+    );
+    await app.ready();
+
+    expect((await app.inject({ method: 'GET', url: '/prefijo1/acme' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/prefijo1/bob' })).statusCode).toBe(429);
+  });
+
+  it('exclude saca un pathname concreto aunque el patrón coincida', async () => {
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    await app.register(fastifyLayer, {
+      exclude: ['/prefijo1/acme'],
+      rateLimit: { banThreshold: 100 },
+      routes: [{ url: '/prefijo1/:idCliente', rateLimit: { max: 1 } }],
+    });
+    app.get('/prefijo1/:idCliente', async () => ({ ok: true }));
+    await app.ready();
+
+    expect((await app.inject({ method: 'GET', url: '/prefijo1/acme' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/prefijo1/acme' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/prefijo1/bob' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/prefijo1/bob' })).statusCode).toBe(429);
+  });
+
+  it('la ventana hour se refleja en retry-after', async () => {
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    await app.register(fastifyLayer, {
+      rateLimit: { banThreshold: 100 },
+      routes: [{ url: '/saludo', rateLimit: { max: 1, window: 'hour' } }],
+    });
+    app.get('/saludo', async () => ({ ok: true }));
+    await app.ready();
+
+    expect((await app.inject({ method: 'GET', url: '/saludo' })).statusCode).toBe(200);
+    const limited = await app.inject({ method: 'GET', url: '/saludo' });
+    expect(limited.statusCode).toBe(429);
+    expect(Number(limited.headers['retry-after'])).toBeGreaterThan(60);
+  });
+
+  it('every multiplica la unidad de la ventana', async () => {
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    await app.register(fastifyLayer, {
+      rateLimit: { banThreshold: 100 },
+      routes: [
+        { url: '/saludo', rateLimit: { max: 5, window: { unit: 'minute', every: 5 } } },
+      ],
+    });
+    app.get('/saludo', async () => ({ ok: true }));
+    await app.ready();
+
+    for (let i = 0; i < 5; i += 1) {
+      expect((await app.inject({ method: 'GET', url: '/saludo' })).statusCode).toBe(200);
+    }
+    const limited = await app.inject({ method: 'GET', url: '/saludo' });
+    expect(limited.statusCode).toBe(429);
+    expect(Number(limited.headers['retry-after'])).toBeGreaterThanOrEqual(299);
+  });
+
+  it('rechaza una ventana desconocida y un patrón duplicado', async () => {
+    const badWindow = Fastify({ logger: false });
+    await expect(
+      badWindow.register(fastifyLayer, {
+        routes: [{ url: '/saludo', rateLimit: { window: 'week' as 'minute' } }],
+      }),
+    ).rejects.toThrow(/window must be minute, hour, or day/);
+    await badWindow.close();
+
+    const duplicated = Fastify({ logger: false });
+    await expect(
+      duplicated.register(fastifyLayer, {
+        routes: [{ url: '/saludo' }, { url: '/saludo' }],
+      }),
+    ).rejects.toThrow(/duplicate routes url/);
+    await duplicated.close();
+  });
 });
