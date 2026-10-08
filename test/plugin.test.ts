@@ -105,6 +105,41 @@ describe('@edgargmaya/fastify-layer', () => {
     ).toBe(200);
   });
 
+  it('sin preferred_username aísla el cupo por email', async () => {
+    const jwt = { issuer: 'urn:serverless:auth', audience: 'urn:serverless:saludo-api' };
+    const alice = jwtWith({
+      iss: jwt.issuer,
+      aud: jwt.audience,
+      sub: 'auth0|67338e99a4f5c72ccad7ce71',
+      email: 'alice@client.com',
+    });
+    const bob = jwtWith({
+      iss: jwt.issuer,
+      aud: jwt.audience,
+      sub: 'auth0|6a1f0023bb12a0f0012ab399',
+      email: 'bob@client.com',
+    });
+    const app = await appWithLayer({
+      include: ['/saludo'],
+      jwt,
+      keyParts: ['username'],
+      rateLimit: { max: 1, banThreshold: 100 },
+    });
+
+    expect(
+      (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${alice}` } }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${alice}` } }))
+        .statusCode,
+    ).toBe(429);
+    expect(
+      (await app.inject({ method: 'GET', url: '/saludo', headers: { authorization: `Bearer ${bob}` } }))
+        .statusCode,
+    ).toBe(200);
+  });
+
   it('aplica cupos distintos según el catálogo de planes de la app', async () => {
     const jwt = { issuer: 'urn:serverless:auth', audience: 'urn:serverless:saludo-api' };
     const starter = jwtWith({
@@ -333,5 +368,11 @@ describe('@edgargmaya/fastify-layer', () => {
       }),
     ).rejects.toThrow(/duplicate routes url/);
     await duplicated.close();
+
+    const badClaim = Fastify({ logger: false });
+    await expect(
+      badClaim.register(fastifyLayer, { jwt: { usernameClaim: [''] } }),
+    ).rejects.toThrow(/usernameClaim\[0\]/);
+    await badClaim.close();
   });
 });

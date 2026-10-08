@@ -14,10 +14,32 @@ export type RedisConnectionOptions = {
 
 export type RateLimitKeyPart = 'sub' | 'username' | 'plan' | 'iss' | 'ip';
 
+/**
+ * Orden para armar el username de la clave Redis.
+ * El primero que sea un string no vacío gana. Si ninguno viene, se usa `sub`.
+ */
+export const DEFAULT_USERNAME_CLAIMS = ['preferred_username', 'email', 'nickname'] as const;
+
 export type JwtOptions = {
   issuer?: string;
   audience?: string;
+  /**
+   * Claims, en orden de prioridad, de los que sale `identity.username`.
+   * Default: `preferred_username`, `email`, `nickname`. Después, `sub`.
+   */
+  usernameClaim?: string[];
 };
+
+/** Lista efectiva. Un nombre vacío falla al registrar, no en cada request. */
+export function usernameClaimsOf(jwt?: JwtOptions): string[] {
+  if (jwt?.usernameClaim === undefined) return [...DEFAULT_USERNAME_CLAIMS];
+  return jwt.usernameClaim.map((name, index) => {
+    if (typeof name !== 'string' || name.trim() === '') {
+      throw new Error(`fastify-layer: jwt.usernameClaim[${index}] must be a non-empty string`);
+    }
+    return name.trim();
+  });
+}
 
 /** Nombre de plan: lo define la app (`starter`, `free`, …). */
 export type UserPlan = string;

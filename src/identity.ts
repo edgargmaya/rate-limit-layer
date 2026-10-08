@@ -1,6 +1,6 @@
 import { decodeJwt } from 'jose';
 import type { FastifyRequest } from 'fastify';
-import type { JwtOptions, ResolvedRateLimit } from './config.js';
+import { usernameClaimsOf, type JwtOptions, type ResolvedRateLimit } from './config.js';
 
 export type RequestIdentity = {
   sub: string;
@@ -42,6 +42,21 @@ function claimValue(payload: Record<string, unknown>, claim: string): unknown {
   return payload[claim];
 }
 
+/** Primer claim no vacío de la lista. Si ninguno aplica, `sub`. */
+export function resolveUsername(
+  payload: Record<string, unknown>,
+  claims: readonly string[],
+  sub: string,
+): string {
+  for (const claim of claims) {
+    const raw = payload[claim];
+    if (typeof raw !== 'string') continue;
+    const value = raw.trim();
+    if (value) return value;
+  }
+  return sub;
+}
+
 /**
  * Identidad para la clave Redis. API Gateway ya validó la firma;
  * aquí solo se decodifica el payload (sin red / JWKS) y se filtra iss/aud.
@@ -52,6 +67,7 @@ export function identityFromRequest(
   jwt?: JwtOptions,
   rateLimit?: ResolvedRateLimit,
 ): RequestIdentity {
+  const usernameClaim = usernameClaimsOf(jwt);
   const catalog = rateLimit ?? {
     max: 10,
     plans: undefined,
@@ -75,10 +91,7 @@ export function identityFromRequest(
     if (jwt?.audience && !audienceOf(payload.aud).includes(jwt.audience)) return anonymous;
 
     const sub = typeof payload.sub === 'string' && payload.sub ? payload.sub : 'anonymous';
-    const username =
-      typeof payload.preferred_username === 'string' && payload.preferred_username
-        ? payload.preferred_username
-        : sub;
+    const username = resolveUsername(payload as Record<string, unknown>, usernameClaim, sub);
     return {
       sub,
       username,

@@ -7,7 +7,7 @@
 import rateLimit from '@fastify/rate-limit';
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { compileLayer, defaults, type LayerOptions } from './config.js';
+import { compileLayer, defaults, usernameClaimsOf, type JwtOptions, type LayerOptions } from './config.js';
 import { identityFromRequest, type RequestIdentity } from './identity.js';
 import { buildRateLimitKey, clientIp } from './key.js';
 import { matchLimit, type LimitMatch } from './match.js';
@@ -26,6 +26,11 @@ const plugin: FastifyPluginAsync<LayerOptions> = async (app: FastifyInstance, op
   const logMessage = opts.logMessage ?? defaults.logMessage;
   const keyParts = opts.keyParts ?? defaults.keyParts;
   const compiled = compileLayer(opts);
+  const jwt: JwtOptions = {
+    ...(opts.jwt?.issuer !== undefined ? { issuer: opts.jwt.issuer } : {}),
+    ...(opts.jwt?.audience !== undefined ? { audience: opts.jwt.audience } : {}),
+    usernameClaim: usernameClaimsOf(opts.jwt),
+  };
 
   const matchOf = (request: FastifyRequest): LimitMatch => {
     if (!request.rateLimitMatch) {
@@ -36,7 +41,7 @@ const plugin: FastifyPluginAsync<LayerOptions> = async (app: FastifyInstance, op
 
   const identityOf = (request: FastifyRequest): RequestIdentity => {
     if (!request.rateLimitIdentity) {
-      request.rateLimitIdentity = identityFromRequest(request, opts.jwt, matchOf(request).rateLimit);
+      request.rateLimitIdentity = identityFromRequest(request, jwt, matchOf(request).rateLimit);
     }
     return request.rateLimitIdentity;
   };

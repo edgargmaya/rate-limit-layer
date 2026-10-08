@@ -1,7 +1,9 @@
 export {
   TIME_WINDOWS,
   compileLayer,
+  DEFAULT_USERNAME_CLAIMS,
   defaults,
+  usernameClaimsOf,
   resolveRateLimit,
   resolveRouteRateLimit,
   resolveTimeWindowMs,
@@ -18,7 +20,7 @@ export {
   type TimeWindowUnit,
   type UserPlan,
 } from './config.js';
-export { identityFromRequest, resolvePlan, type RequestIdentity } from './identity.js';
+export { identityFromRequest, resolvePlan, resolveUsername, type RequestIdentity } from './identity.js';
 export { buildRateLimitKey } from './key.js';
 export { matchLimit, requestPath, shouldApply, type LimitMatch } from './match.js';
 export { closeRedis } from './redis.js';

@@ -103,6 +103,74 @@ describe('identityFromRequest', () => {
     expect(identityFromRequest(req(`Bearer ${token}`), jwt, catalog).username).toBe('anonymous');
   });
 
+  it('sin preferred_username usa email y, si tampoco está, nickname', () => {
+    const withEmail = jwtWith({
+      iss: 'urn:serverless:auth',
+      aud: 'urn:serverless:saludo-api',
+      sub: 'auth0|aaa',
+      email: 'alice@client.com',
+      nickname: 'ali',
+    });
+    expect(identityFromRequest(req(`Bearer ${withEmail}`), jwt, catalog).username).toBe('alice@client.com');
+
+    const nicknameOnly = jwtWith({
+      iss: 'urn:serverless:auth',
+      aud: 'urn:serverless:saludo-api',
+      sub: 'auth0|bbb',
+      nickname: 'bob',
+    });
+    expect(identityFromRequest(req(`Bearer ${nicknameOnly}`), jwt, catalog).username).toBe('bob');
+  });
+
+  it('sin claims de username deja el sub en la clave', () => {
+    const token = jwtWith({
+      iss: 'urn:serverless:auth',
+      aud: 'urn:serverless:saludo-api',
+      sub: 'auth0|67338e99a4f5c72ccad7ce71',
+    });
+    const identity = identityFromRequest(req(`Bearer ${token}`), jwt, catalog);
+    expect(identity.username).toBe('auth0|67338e99a4f5c72ccad7ce71');
+    expect(buildRateLimitKey(['username'], identity, '203.0.113.10', '/tenants/:tenantId')).toBe(
+      'auth0|67338e99a4f5c72ccad7ce71:/tenants/:tenantId',
+    );
+  });
+
+  it('usernameClaim de la app pisa el orden por defecto', () => {
+    const token = jwtWith({
+      iss: 'urn:serverless:auth',
+      aud: 'urn:serverless:saludo-api',
+      sub: 'auth0|ccc',
+      preferred_username: 'bob',
+      email: 'bob@client.com',
+      'https://mi-app/email': 'bob@tenant.com',
+    });
+    expect(
+      identityFromRequest(
+        req(`Bearer ${token}`),
+        { ...jwt, usernameClaim: ['https://mi-app/email', 'email'] },
+        catalog,
+      ).username,
+    ).toBe('bob@tenant.com');
+  });
+
+  it('un claim vacío o en blanco cede al siguiente y una lista vacía cae a sub', () => {
+    const token = jwtWith({
+      iss: 'urn:serverless:auth',
+      aud: 'urn:serverless:saludo-api',
+      sub: 'auth0|ddd',
+      preferred_username: '   ',
+      email: 'd@client.com',
+    });
+    expect(identityFromRequest(req(`Bearer ${token}`), jwt, catalog).username).toBe('d@client.com');
+    expect(
+      identityFromRequest(req(`Bearer ${token}`), { ...jwt, usernameClaim: [] }, catalog).username,
+    ).toBe('auth0|ddd');
+  });
+
+  it('rechaza un nombre de claim vacío', () => {
+    expect(() => identityFromRequest(req(), { usernameClaim: [''] })).toThrow(/usernameClaim\[0\]/);
+  });
+
   it('sin catálogo no usa el claim plan para el cupo (plan = default)', () => {
     const token = jwtWith({
       iss: 'urn:serverless:auth',

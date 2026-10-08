@@ -87,7 +87,7 @@ src/
 | `routes` | `{ url, rateLimit? }`. `url` = patrón Fastify. Sin `rateLimit`, usa el global |
 | `routes[].rateLimit.window` | `'minute'` (1 minuto) o `{ unit: 'minute' \| 'hour' \| 'day', every: 5 }`. Una por regla |
 | `redis` | `host`, `port`, `password`, `tls` |
-| `jwt` | `issuer`, `audience` (filtro del payload) |
+| `jwt` | `issuer`, `audience`. `usernameClaim` elige el username de la clave: default `preferred_username`, `email`, `nickname`; si ninguno viene, `sub` |
 | `keyParts` | default `username`, `ip` (añade `plan` si usas catálogo) |
 | `rateLimit.max` | Cupo único si no hay `plans` (default 10). Lo heredan las reglas que no traen máximo |
 | `rateLimit.plans` | Mapa `nombre → máximo` definido por la app |
